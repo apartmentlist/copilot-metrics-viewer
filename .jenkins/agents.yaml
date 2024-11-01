@@ -1,0 +1,49 @@
+---
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: gcloud
+    image: gcr.io/cloud-builders/gcloud
+    command:
+    - "tail"
+    - "-f"
+    - "/dev/null"
+    imagePullPolicy: Always
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "500m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+  - name: krane
+    image: gcr.io/alist-development/krane:latest
+    command:
+    - "tail"
+    - "-f"
+    - "/dev/null"
+    imagePullPolicy: Always
+    resources:
+      requests:
+        memory: "1500Mi"
+        cpu: "500m"
+      limits:
+        memory: "1500Mi"
+        cpu: "500m"
+  - name: podman
+    image: gcr.io/alist-development/podman:4.5.0
+    securityContext:
+      privileged: true
+    command:
+    - "tail"
+    - "-f"
+    - "/dev/null"
+    imagePullPolicy: Always
+    resources:
+      requests:
+        memory: "8Gi"
+        cpu: "4"
+      limits:
+        memory: "8Gi"
+        cpu: "4"

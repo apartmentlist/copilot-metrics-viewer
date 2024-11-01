@@ -1,0 +1,145 @@
+#!/usr/bin/env groovy
+
+// https://github.com/apartmentlist/ci-shared-library
+@Library('ci-shared-library')_
+
+// Log Rotation
+properties([
+  buildDiscarder(
+    logRotator(
+      artifactDaysToKeepStr: '',
+      artifactNumToKeepStr: '',
+      daysToKeepStr: '30',
+      numToKeepStr: '100'
+    )
+  )
+]) // properties
+
+pipeline {
+
+  triggers {
+    pollSCM ignorePostCommitHooks: true, scmpoll_spec: ''
+  }
+
+  environment {
+    APP_NAME         = sh(script: "basename -s .git `git remote get-url origin`", returnStdout: true).trim()
+    GIT_COMMIT_SHORT = sh(script: "git rev-parse --short ${GIT_COMMIT}", returnStdout: true).trim()
+    GIT_MESSAGE      = sh(script: "git log --format=%B -n 1 ${GIT_COMMIT}", returnStdout: true).trim()
+    GIT_USER         = sh(script: "git log -1 --pretty=format:'%ae'", returnStdout: true).trim()
+    SLACK_CHANNEL    = "#it-alerts"
+  }
+  
+  agent {
+    kubernetes {
+      yamlFile '.jenkins/agents.yaml'
+      defaultContainer 'jnlp'
+    }
+  }
+  
+  options {
+    timestamps()
+    timeout(time: 120, unit: 'MINUTES')
+  }
+
+  stages {
+
+    stage('PREPARATION') {
+      parallel {
+        stage('Slack Preparation') {
+          steps {
+            slackPreparation()
+          } // steps
+        } // stage
+        stage ('Build Description') {
+          steps {
+            buildDescription()
+          } // steps
+        } // stage
+        stage ('JIRA Checker') {
+          steps {
+            withCredentials([
+              usernameColonPassword(credentialsId: "eng-svc-aptli-st", variable: "JIRA_TOKEN"),
+              usernameColonPassword(credentialsId: "ApartmentList-CI", variable: "GITHUB_TOKEN")
+            ]) {
+              jiraChecker(JIRA_TOKEN, GITHUB_TOKEN)
+            }
+          } // steps
+        } // stage
+        stage('PR Check') {
+          when {
+            allOf {
+              changeRequest()
+              expression { currentBuild.getBuildCauses()[0]._class == "org.jenkinsci.plugins.pipeline.github.trigger.IssueCommentCause" }
+            }
+          }
+          steps {
+            prCheck()
+          } // steps
+        } // stage - PR Check
+      } // parallel
+    } // stage('PREPARATION')
+
+    stage('Tests') {
+      parallel{
+        stage ('k8s & ejson linter') {
+          steps {
+            container('krane') {
+              k8sLinter('alist-corporate-it', '.kube/config')
+            }
+          } // steps
+        } // stage
+      } // parallel
+    } // stage
+
+    stage('corporate-it: build') {
+      when {
+        allOf {
+          branch 'main'
+          not { changeRequest() }
+        }
+      }
+      parallel {
+        stage('Container Build') {
+          steps {
+            podmanBuildContainer('alist-corporate-it', "${APP_NAME}")
+          } // steps
+        } // stage
+      } // parallel
+    } // stage
+
+    stage('corporate-it: deploy') {
+      when {
+        allOf {
+          branch 'main'
+          not { changeRequest() }
+        }
+      }
+      parallel {
+        stage('GKE: Deploy') {
+          steps {
+            deployToK8s([
+              containerName: 'krane',
+              project: 'alist-corporate-it',
+              clusterName: 'it',
+              configDir: '.kube/config'
+            ])
+          } // steps
+        } // stage
+      } // parallel
+    } // stage
+
+  } // stages
+
+  post {
+    success {
+      buildSuccess('alist-corporate-it')
+    } // success
+    aborted {
+      buildAborted('alist-corporate-it')
+    } // aborted
+    failure {
+      buildFailure('alist-corporate-it')
+    } // failure
+  } // post
+
+} // pipeline
